@@ -53,6 +53,7 @@ alter table customers add column ordersamount int;
 
 -- a. Mediante sentencia UPDATE...FROM actualizar las columnas agregadas
 
+--Dos modificaciones, dos operaciones
 update customers as c1
 set ordersquantity = auxiliar.cantidad
 from (select c.customerid as cus, count(od.orderid) as cantidad
@@ -72,16 +73,26 @@ where c1.customerid = auxiliar.cus
 returning *
 ;
 
-update customers 
-set ordersquantity = null, ordersamount = null;
+-- Dos modificaciones una actualizacion
+update customers as c1
+set ordersquantity = auxiliar.cantidad , ordersamount = auxiliar.Importes_Acumulados
+from (  select c.customerid as cus,
+			   count(o.orderid) as cantidad, 
+			   coalesce(sum((od.unitprice * od.quantity) - od.discount),0) as Importes_Acumulados
+		from customers c left join orders o using(customerid) left join orderdetails od using(orderid)
+		where c.customerid ilike 'QUICK'
+		group by c.customerid
+	)as auxiliar
+where c1.customerid = auxiliar.cus
+;
+--MAL count cuenta todas las tuplas que coincidan en orderdetails
 
-select *
+
+select customerid , ordersquantity , ordersamount 
 from customers
-where ordersamount is null
-order by ordersamount 
-limit 10;
-
-
+where customerid ilike 'QUICK'
+order by ordersamount desc
+;
 
 -- b. Mediante sentencia UPDATE y sunconsulta actualizar las columnas agregadas
 update customers as c1
@@ -104,7 +115,21 @@ set ordersamount = (
 where c1.ordersamount is null 
 ;
 
--- 6. Desarrollar las sentencias necesarias que permitan eliminar todo el historial de órdenes de un 
+update customers as c1
+set ordersquantity  = (
+	select count(o.customerid)
+	from orders o
+	where o.customerid = c1.customerid 
+	),
+	ordersamount = (
+	select sum((od.unitprice * od.quantity) - od.discount)
+	from orders o left join orderdetails od using(orderid)
+	where o.customerid = c1.customerid 
+	) 
+;
+
+-- 6. Desarrollar las sentencias necesarias que permitan eliminar todo el historial 
+-- de órdenes de un 
 -- cliente cuyo dato conocido es companyname, utilizando DELETE…USING-- 
 
 delete from orders as o
