@@ -209,12 +209,11 @@ create or replace function stock_control()
 returns void as 
 $$
 declare 
-	li_current_supplierd int4;
- 	li_purcharseid integer;
- 	prod RECORD;
+	li_current_supplierd int4 := '000';
+ 	li_purchaseid integer;
+ 	lr_prod RECORD;
 begin 
-	li_current_supplierd := '000';
-	for prod in (
+	for lr_prod in (
 		select 
 			productid,
 			unitsonorder - unitsinstock as units,
@@ -224,19 +223,15 @@ begin
 			inner join suppliers using(supplierid) 
 		where 
 			unitsinstock < reorderlevel 
-			and unitsonorder != '0'
+			and unitsonorder - unitsinstock > '0'
 		order by supplierid
 		)
 	loop
-		if prod.supplierid != li_current_supplierd then
-			li_current_supplierd := prod.supplierid; 
-			execute 'insert into purchases values (DEFAULT,current_date,' || li_current_supplierd ||');';
-			li_purcharseid := (select purchaseid from purchases order by purchaseid desc limit 1);
+		if lr_prod.supplierid != li_current_supplierd then
+			 insert into purchases values (DEFAULT,current_date,lr_prod.supplierid)
+			 returning(purchaseid) into li_purchaseid;
 		end if;
-		if prod.units > '0' then
-		execute 
-				'insert into purchasedetails values (' ||li_purcharseid || ',' || prod.productid || ',' ||prod.units ||');';
-		end if;
+		insert into purchasedetails values (li_purchaseid , lr_prod.productid ,lr_prod.units );
     end loop;
 end;
 $$
@@ -302,9 +297,39 @@ select * from details_by_country('1996-07-04','1996-08-04');
 --  SELECT y RETURN NEXT. Indicar, además del código, qué se espera que devuelva la 
 --  función inventada.
 
-create or replace function algo()
+create or replace function get_orders() 
 returns table (
-categories 
-)
+    pi_orderid int,
+    lv_customerid varchar,
+    li_employeeid int,
+    ld_orderdate date
+) as $$
+declare
+    lr_order RECORD;
+begin
+    for lr_order in
+        select 
+        	orderid, 
+        	customerid, 
+        	employeeid, 
+        	orderdate 
+        from 
+        	orders 
+        where 
+        	customerid ilike 'VINET'
+    loop
+        pi_orderid := lr_order.orderid;
+        lv_customerid := lr_order.customerid;
+        li_employeeid := lr_order.employeeid;
+        ld_orderdate := lr_order.orderdate;
+        return next;
+    end loop;
+end; $$
+language 'plpgsql';
 
+SELECT * from get_orders();
+
+-- Esto devolverá un conjunto de resultados con
+-- una fila para cada pedido del cliente 'VINET',
+-- con las columnas definidas en la declaración.
 
