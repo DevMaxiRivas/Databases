@@ -188,36 +188,66 @@ select * from details_by_year('1997');
 --  tabla de detalles.
 
 -- reorderlevel minimo
--- unitinstock stock actual
+-- unitsinstock stock actual
 -- unitsonorder stock a comprar
 
+drop table purchases;
 create table purchases(
 	purchaseid serial primary key,
-	purchasedate date
+	purchasedate date,
+	supplierid int4 not null,foreign key (supplierid) references suppliers
 );
+drop table purchasedetails;
 create table purchasedetails (
 	purchaseid integer not null,foreign key (purchaseid) references purchases,
 	productid int4 not null,foreign key (productid) references products,  
-	supplierid int4 not null,foreign key (supplierid) references suppliers,
 	quantity int4,
-	primary key(purchaseid,productid,supplierid)
+	primary key(purchaseid,productid)
 );
 
 create or replace function stock_control()
-returns int as 
+returns void as 
 $$
-declare li_contador integer := 0;
-declare li_purc integer;
+declare 
+	li_current_supplierd int4;
+ 	li_purcharseid integer;
+ 	prod RECORD;
 begin 
-	execute 'insert into purchases values (default,CURRENT_DATE)'
-	li_purc = (select purchaseid from purchases order bypurchaseid limit 1);
-	for prod in (select productid from products where unitsinstock < reorderlevel)
+	li_current_supplierd := '000';
+	for prod in (
+		select 
+			productid,
+			unitsonorder - unitsinstock as units,
+			supplierid 
+		from 
+			products
+			inner join suppliers using(supplierid) 
+		where 
+			unitsinstock < reorderlevel 
+			and unitsonorder != '0'
+		order by supplierid
+		)
 	loop
-		execute ''
-		
-	end loop
-	
+		if prod.supplierid != li_current_supplierd then
+			li_current_supplierd := prod.supplierid; 
+			execute 'insert into purchases values (DEFAULT,current_date,' || li_current_supplierd ||');';
+			li_purcharseid := (select purchaseid from purchases order by purchaseid desc limit 1);
+		end if;
+		if prod.units > '0' then
+		execute 
+				'insert into purchasedetails values (' ||li_purcharseid || ',' || prod.productid || ',' ||prod.units ||');';
+		end if;
+    end loop;
+end;
+$$
+language plpgsql;
 
+select * from stock_control();
+select * 
+from 
+	purchases
+	inner join purchasedetails using(purchaseid)
+;
 --  h. Crear una función que calcule y despliegue por cada país destino de ordenes 
 --  (orders.shipcountry) y por un rango de fechas ingresado por parámetros la cantidad 
 --  de productos diferentes que se vendieron y la cantidad de clientes diferentes. Ejemplo 
@@ -271,5 +301,10 @@ select * from details_by_country('1996-07-04','1996-08-04');
 --  i. Inventar una única función que combine RETURN QUERY, recorrido de resultados de 
 --  SELECT y RETURN NEXT. Indicar, además del código, qué se espera que devuelva la 
 --  función inventada.
+
+create or replace function algo()
+returns table (
+categories 
+)
 
 
