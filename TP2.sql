@@ -105,7 +105,7 @@ end;
 $$
 language plpgsql;
 
-select * from subtotal_to_order('0');
+select * from subtotal_to_order('10249');
 
 --  e. Crear una función donde se muestren todos los atributos de cada Orden junto a Id y 
 --  Nombre del Cliente y el Empleado que la confeccionó. Mostrar el total utilizando la 
@@ -130,7 +130,7 @@ returns table (
  	companyname varchar(40),
 	lastname varchar,
 	firstname varchar,
-	subtotal numeric(10,2)
+	subtotal money
 )
 as
 $$
@@ -141,7 +141,7 @@ begin
 		c.companyname,
 		e.lastname, 
 		e.firstname, 
-		sum(od.quantity * od.unitprice - od.discount) as subtotal
+		(select * from subtotal_to_order(o.orderid))
 	from 
 		customers c 
 		right join orders o using(customerid) 
@@ -154,32 +154,38 @@ $$
 language plpgsql;
 
 select * from orders_details();
-
+select orderid from orders limit 1;
 
 --  f. Crear una función que muestre, por cada mes del año ingresado por parámetro, la 
 --  cantidad de órdenes generada, junto a la cantidad de órdenes acumuladas hasta ese 
 --  mes (inclusive).
-
-create  or replace function details_by_year(pv_year integer)
+create or replace function details_by_year(pi_anio varchar(4))
 returns table (
-	month_ text,
-	quantity_ bigint
-)
-as
-$$
+    mes text,
+    ord_gen bigint, -- tipo que devuelve count()
+    ord_ac bigint
+) as $$
 begin
-	return query
-	select to_char(orderdate,'TMMonth'), count(orderid)
-	from orders 
-	where date_part ('year',orderdate) = pv_year
-	group by date_part ('month',orderdate), to_char(orderdate,'TMMonth')
-	order by date_part ('month',orderdate)
-	;
+    ord_ac := 0;
+    for mes, ord_gen in
+        select
+            to_char(orderdate, 'tmmonth'),
+            count(orderid)
+        from orders
+        where to_char(orderdate, 'yyyy') = pi_anio
+        group by
+            date_part('month', orderdate),
+            to_char(orderdate, 'tmmonth')
+        order by date_part('month', orderdate)
+    loop
+        ord_ac := ord_ac + ord_gen;
+        return next;
+    end loop;
 end;
-$$
-language plpgsql;
+$$ language plpgsql;
 
 select * from details_by_year('1997');
+
 
 
 --  g. Crear una función que permita generar las órdenes de compra necesarias 
@@ -189,7 +195,7 @@ select * from details_by_year('1997');
 
 -- reorderlevel minimo
 -- unitsinstock stock actual
--- unitsonorder stock a comprar
+-- unitsonorder stock que debe haber disponible
 
 drop table purchases;
 create table purchases(
