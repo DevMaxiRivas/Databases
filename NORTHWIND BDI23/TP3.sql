@@ -21,7 +21,7 @@ create table clientes(
 
 create table ventas(
 	ven_id serial primary key,
-	cli_id serial, foreign key (cli_id) references clientes,
+	cli_id integer, foreign key (cli_id) references clientes,
 	ven_importe real not null
 );
 
@@ -67,7 +67,10 @@ create table marcas(
 -- 9)Investigar la resolución de este punto. Existiendo la tabla productos, establecer la clave foránea 
 -- relacionándola con la tabla marcas a través de la columna mar_id. 
 
-alter table productos add column mar_id serial not null;
+alter table productos add column mar_id integer not null;
+--Unicamente debe tener el mismo dominio, en este caso serial e integer tiene el mismo dominio
+-- pero unicamente en el caso en el que en el que se utiliza serial como clave primaria y hay que vincular
+-- como clave foranea en en otra tabla se declara como integer el atributo
 
 alter table productos
 add constraint mar_id

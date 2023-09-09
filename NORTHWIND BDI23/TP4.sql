@@ -37,17 +37,13 @@ order by country;
 select contactname, postalcode
 from customers
 where postalcode between 'A' and 'z';
--- MAL
+--MAL
 
 select contactname, postalcode
 from customers
 where lower(postalcode) between 'a' and 'z'
-order by postalcode
 ;
--- Correcto
-select postalcode
-from customers
-order by postalcode 
+--CORRECTO
 
 -- 6)Nombre y teléfono de los clientes donde se realza contacto directo con el propietario, ordenado 
 -- en forma alfabético.
@@ -145,6 +141,12 @@ from orders
 where date_part('year', orderdate) = '1998'
 group by date_part('month', orderdate);
 -- No pedian ordenado pero habria sido un error poner order by mes pues ordenaria por las cadenas abril, enero...
+
+select to_char(orderdate,'TMMonth') as mes,	count(orderdate)
+from orders
+where date_part('year', orderdate) = '1998'
+group by date_part('month', orderdate), to_char(orderdate,'TMMonth')  
+;
 
 select date_part('month', orderdate),count(orderdate)
 from orders

@@ -17,6 +17,17 @@ select companyname, address
 from customers c
 where customerid = (
 	select customerid
+	from orders o
+	where o.shippeddate = (
+		select max(o2.shippeddate)
+		from orders o2)
+	order by orderid desc
+	limit 1);
+
+select companyname, address
+from customers c
+where customerid = (
+	select customerid
 	from orders
 	where shippeddate is not null
 	order by (shippeddate, orderid) desc
@@ -46,15 +57,15 @@ where exists (
 --4) Numero de orden, Fecha de Orden, Fecha de envio, Total de la orden (considerando descuentos)
 --   de todas las ordenes del cliente Rancho grande.
 
-select orderid, orderdate,	shippeddate,
-	(select sum(quantity * unitprice- discount) as total
+select orderid, customerid, orderdate,	shippeddate, (
+	select sum(quantity * unitprice- discount) as total
 	from orderdetails od
 	where od.orderid = o1.orderid
 	)
-from orders as o1
+from orders o1
 where exists (
 	select orderid
-	from customers as c1
+	from customers c1
 	where 
 		c1.customerid = o1.customerid
 		and companyname ilike  '%rancho grande%') 
@@ -112,12 +123,18 @@ order by companyname;
 
 --8. Listado alfabatico de los empleados que tengan al menos 2 subordinados.
 
-select lastname, firstname
+select *
 from employees as e
 where (
 	select count(reportsto)
 	from employees
 	where e.employeeid = reportsto
 ) >= 2
+order by lastname,	firstname
+;
+
+select lastname,firstname, employeeid, reportsto
+from employees e
+where e.reportsto >= 2
 order by lastname,	firstname
 ;
