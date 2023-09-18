@@ -70,19 +70,20 @@ returns trigger as
 $$
 declare 
 begin
-	if old is not null and new is not null then -- Caso Update
+	case 
+		when TG_OP = 'UPDATE' then -- Caso Update
 		update products set unitsinstock = unitsinstock + old.quantity - new.quantity
 		where productid = old.productid
 		;
-	elsif old is null then -- Caso Insert
+		when TG_OP = 'INSERT' then -- Caso Insert
 		update products set unitsinstock = unitsinstock - new.quantity
 		where productid = new.productid
 		;
-	else -- Caso Delete
+		when TG_OP = 'DELETE'then -- Caso Delete
 		update products set unitsinstock = unitsinstock + old.quantity
 		where productid = old.productid
 		;
-	end if;
+	end case;
 	return new;
 end;
 $$
@@ -134,35 +135,34 @@ create table audits(
 	after_country varchar(15),
 	after_phone varchar(24),
 	after_fax varchar(24)	
+)
 ;
-
---	old.customerid,old.companyname,old.contactname,old.contacttitle,old.address,old.city,old.region,old.postalcode,old.country,old.phone,old.fax
---	new.customerid,new.companyname,new.contactname,new.contacttitle,new.address,new.city,new.region,new.postalcode,new.country,new.phone,new.fax,
 
 create or replace function user_auditing()
 returns trigger as 
 $$
-begin
-	if old is not null and new is not null then -- Caso Update
-		insert into audits values
-		(
-		default,current_user,current_timestamp,TG_OP,
-		old.customerid,old.companyname,old.contactname,old.contacttitle,old.address,old.city,old.region,old.postalcode,old.country,old.phone,old.fax,
-		new.customerid,new.companyname,new.contactname,new.contacttitle,new.address,new.city,new.region,new.postalcode,new.country,new.phone,new.fax
-		);
-	elsif old is null then -- Caso Insert
-		insert into audits values
-		(
-		default,current_user,current_timestamp,TG_OP,
-		null,null,null,null,null,null,null,null,null,null,null,
-		new.customerid,new.companyname,new.contactname,new.contacttitle,new.address,new.city,new.region,new.postalcode,new.country,new.phone,new.fax
-		);
-	else -- Caso Delete
-		insert into audits values (default,current_user,current_timestamp,TG_OP,
-		old.customerid,old.companyname,old.contactname,old.contacttitle,old.address,old.city,old.region,old.postalcode,old.country,old.phone,old.fax,
-		null,null,null,null,null,null,null,null,null,null,null
-		);
-	end if;
+begin -- Caso update
+	case 
+		when TG_OP = 'UPDATE' then
+			insert into audits values
+			(
+			default,current_user,current_timestamp,TG_OP,
+			old.customerid,old.companyname,old.contactname,old.contacttitle,old.address,old.city,old.region,old.postalcode,old.country,old.phone,old.fax,
+			new.customerid,new.companyname,new.contactname,new.contacttitle,new.address,new.city,new.region,new.postalcode,new.country,new.phone,new.fax
+			);
+		when TG_OP = 'INSERT' then -- Caso Insert
+			insert into audits values
+			(
+			default,current_user,current_timestamp,TG_OP,
+			null,null,null,null,null,null,null,null,null,null,null,
+			new.customerid,new.companyname,new.contactname,new.contacttitle,new.address,new.city,new.region,new.postalcode,new.country,new.phone,new.fax
+			);
+		when TG_OP = 'DELETE'then -- Caso Delete
+			insert into audits values (default,current_user,current_timestamp,TG_OP,
+			old.customerid,old.companyname,old.contactname,old.contacttitle,old.address,old.city,old.region,old.postalcode,old.country,old.phone,old.fax,
+			null,null,null,null,null,null,null,null,null,null,null
+			);
+	end case;
 	return new;
 end;
 $$
@@ -171,21 +171,70 @@ language plpgsql;
 create trigger modify_customers after insert or update or delete
 on customers for each row execute procedure user_auditing();
 
-select * from customers limit 1;
+--Test
+truncate audits;
 select * from audits;
-select * from customers where customerid ilike '%NEWUS%';
 
-delete from customers where customerid ilike '%NEWUS%';
 insert into customers values
 ('NEWUS','Alfreds Futterkiste','Maria Anders','Sales Representative','Obere Str. 57',
 'Berlin','12209','Germany','030-0074321','030-0076545')
 ;
 update customers set contactname = 'NEWCO' where customerid ilike '%NEWUS%';
+delete from customers where customerid ilike '%NEWUS%';
 
 -- e. Agregar atributos en el encabezado de la Orden que registren la cantidad de artículos 
 -- del detalle y el importe total de cada orden. Realizar los triggers necesarios para 
 -- mantener la redundancia controlada de los nuevos atributos.
 
+alter table orders add column quantity int4 default '0';
+alter table orders add column total numeric(10, 2) default '0'; 
+alter table orders drop column total;
+
+create or replace function subtotal_orders()
+returns trigger as
+$$
+begin 
+	case 
+		when TG_OP = 'UPDATE' then
+			if new.quantity != old.quantity then
+				update orders 
+				set quantity = quantity - old.quantity + new.quantity
+				;
+			end if;
+			if new.unitprice != old.unitprice or new.quantity != old.quantity then
+				update orders 
+				set total = total - old.quantity * old.unitprice + new.quantity * new.unitprice
+				;
+			end if;	
+		when TG_OP = 'INSERT' then 
+			update orders 
+			set quantity = quantity + new.quantity
+			;
+			update orders 
+			set total = total + new.quantity * new.unitprice
+			;
+		when TG_OP = 'DELETE' then 
+			update orders 
+			set quantity = quantity - old.quantity
+			;
+			update orders 
+			set total = total - old.unitprice * old.quantity
+			;
+	end case;
+	return new;
+end;
+$$
+language plpgsql;
+
+create trigger total_orders after insert or update or delete
+on orderdetails for each row execute procedure subtotal_orders();
+
+select orderid,quantity,total from orders where orderid = 10248;
+update orders set quantity = 0, total = 0 where orderid= 10248;
+
+insert into orderdetails values (10248,1,14.00,10,0);
+update orderdetails set unitprice = '20' where orderid = '10248' and productid = '1';
+delete from orderdetails where orderid = 10248 and productid  = 1;
 
 
 -- f. Realizar triggers a elección para probar las siguientes combinaciones y situaciones 

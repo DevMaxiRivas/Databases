@@ -94,6 +94,51 @@ where customerid ilike 'QUICK'
 order by ordersamount desc
 ;
 
+--Res Entregada
+update customers c set
+    ordersquantity = a.cantidad,
+    ordersamount = b.monto
+from (
+    select
+        count(o.orderid) as cantidad,
+        ca.customerid
+    from customers ca left join orders o using(customerid)
+    group by ca.customerid
+) a, (
+    select
+        coalesce(sum( (od.unitprice * od.quantity) - od.discount), 0) as monto,
+        cb.customerid
+    from customers cb
+        left join orders o using(customerid)
+        left join orderdetails od using(orderid)
+    group by cb.customerid
+) b
+where
+    c.customerid = a.customerid
+    and c.customerid = b.customerid;
+   
+--Res Correcta
+update customers c set
+    ordersquantity = a.cantidad,
+    ordersamount = b.monto
+from (
+    select
+        count(orderid) as cantidad,
+    from orders
+    group by customerid
+) a, (
+    select
+        coalesce(sum( (od.unitprice * od.quantity) - od.discount), 0) as monto,
+        o.customerid
+    from orders o 
+        inner join orderdetails od using(orderid)
+    group by o.customerid
+) b
+where
+    c.customerid = a.customerid
+    and c.customerid = b.customerid;
+  --REVISAR
+
 -- b. Mediante sentencia UPDATE y sunconsulta actualizar las columnas agregadas
 update customers as c1
 set ordersamount = (
