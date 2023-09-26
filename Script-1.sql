@@ -58,5 +58,3 @@ order by salary desc;
 
 -- 6. Listar apellido, nombre, ciudad y salario de los empleados acompañado de la resta del salario 
 -- con el salario de la fila anterior de la misma ciudad. El resultado esperado es similar a:
-
--- "HOLA MUNDO"
