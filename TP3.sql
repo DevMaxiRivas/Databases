@@ -258,6 +258,8 @@ set ordersquantity = (
     where o.customerid = c.customerid
 );
 
+
+
 -- f. Realizar triggers a elección para probar las siguientes combinaciones y situaciones 
 -- respondiendo las siguientes consultas
 -- BEFORE - FOR STATEMENT
