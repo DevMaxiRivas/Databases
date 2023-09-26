@@ -1,3 +1,10 @@
+-- Trabajo Práctico 2
+-- Base de Datos II
+-- Grupo 3:
+    -- Rodrigo Kanchi Flores
+    -- Maximiliano Ezequiel Rivas
+    -- Ezequiel Lizandro Dzioba
+
 -- a. Crear un disparador para impedir que ingresen dos proveedores en el mismo 
 -- domicilio. (tener en cuenta la ciudad y país).
 
@@ -188,6 +195,7 @@ delete from customers where customerid ilike '%NEWUS%';
 
 alter table orders add column quantity int4 default '0';
 alter table orders add column total numeric(10, 2) default '0'; 
+alter table orders drop column total;
 
 create or replace function subtotal_orders()
 returns trigger as
@@ -236,47 +244,103 @@ update orderdetails set unitprice = '20' where orderid = '10248' and productid =
 delete from orderdetails where orderid = 10248 and productid  = 1;
 
 
-alter table customers
-add column ordersquantity int4 default 0,
-add column ordersamount numeric(10, 2) default 0;
+-- F) Realizar triggers a elección para probar las siguientes combinaciones y
+-- situaciones respondiendo las siguientes consultas:
 
-alter table customers drop column ordersamount;
-select customerid, ordersquantity, ordersamount
-from customers
-;
-update customers c
-set ordersquantity = (
-    select count(o.orderid)
-    from orders o
-    where o.customerid = c.customerid
-),
-    ordersamount = (
-    select coalesce(sum( (od.unitprice * od.quantity) - od.discount), 0)
-    from 
-    	orders o 
-        left join orderdetails od using(orderid)
-    where o.customerid = c.customerid
-);
+-- BEFORE - FOR STATEMENT ------------------------------------------------------
 
--- f. Realizar triggers a elección para probar las siguientes combinaciones y situaciones 
--- respondiendo las siguientes consultas
--- BEFORE - FOR STATEMENT
+CREATE OR REPLACE FUNCTION before_for_statement()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE NOTICE '[BEFORE STMT] NEW = %', NEW; -- (i)
+    IF 0 < (SELECT COUNT(*) FROM countries WHERE country = 'URU')
+    AND TG_OP != 'DELETE' THEN
+        RAISE EXCEPTION '[BEFORE STMT] Uruguay existe :O' -- (iii)
+        USING HINT = 'Elimina a Uruguay ;)';
+    END IF;
+    RETURN NULL; -- (ii)
+END
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER before_for_statement BEFORE INSERT OR UPDATE OR DELETE
+ON countries FOR STATEMENT
+EXECUTE FUNCTION before_for_statement();
+
 -- i. ¿Qué sucede con la variable NEW?
---	La variable new queda en estado NULL
+
+-- NEW es NULL.
+DELETE FROM countries
+WHERE country = 'CAN'; -- NEW = <NULL>
 
 -- ii. ¿Qué sucede ante un RETURN NULL?
--- Postgres no realiza lo que tiene en el
--- trigger y termina la ejecucion.
+
+-- La ejecución de la función finaliza, por lo que el trigger y la transacción
+-- también finalizan y los cambios se ven aplicados.
+INSERT INTO countries VALUES ('Canada', 'CAN');
 
 -- iii. ¿Qué sucede ante un RAISE EXCEPTION?
--- Cuando ocurre un RAISE EXCEPTION se para la
--- ejecucion de la consulta y se hace un rollback
--- del estado anterior de la base de datos
 
--- AFTER - FOR EACH ROW
+-- La transacción se interrumpe y todos los cambios se deshacen (rollback).
+INSERT INTO countries VALUES ('Uruguay', 'URU');
+UPDATE countries SET descripcountry = 'uruguay' WHERE country = 'URU';
+DELETE FROM countries WHERE country = 'URU';
+INSERT INTO countries VALUES
+    ('emiratos árabes unidos', 'ARE'),
+    ('Bolivia', 'BOL');
+
+-- AFTER - FOR EACH ROW --------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION after_for_each_row()
+RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+    RAISE NOTICE '[AFTER ROW] NEW = %', NEW; -- (iv)
+    IF TG_OP != 'DELETE' THEN
+        NEW.descripcountry := UPPER(NEW.descripcountry); -- (v)
+        RAISE NOTICE '[AFTER ROW] NEW* = %', NEW;
+    END IF;
+    CASE NEW.country
+        WHEN 'ARE', 'USA' THEN RETURN NEW; -- (v)
+        WHEN 'ERR' THEN RAISE EXCEPTION '[AFTER ROW] Algo salió mal.'; -- (vii)
+        ELSE RETURN NULL; -- (vi)
+    END CASE;
+END
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER after_for_each_row AFTER INSERT OR UPDATE OR DELETE
+ON countries FOR EACH ROW
+EXECUTE FUNCTION after_for_each_row();
+
 -- iv. ¿Qué sucede con la variable NEW?
--- La variable NEW queda en estado NULL
+
+-- INSERT: toma los valores de la fila a insertar.
+INSERT INTO countries VALUES ('Nombre', 'Cod'); -- NEW = (Nombre,Cod)
+
+-- UPDATE: toma los valores de la fila a actualizar y sus correspondientes
+-- modificaciones.
+UPDATE countries SET descripcountry = 'bolivia'
+WHERE country = 'BOL'; -- NEW = (bolivia,BOL)
+
+-- DELETE: es NULL.
+DELETE FROM countries WHERE country = 'CHI'; -- NEW = <NULL>
 
 -- v. ¿Qué sucede ante una modificación de valores de NEW y RETURN NEW?
+
+-- A diferencia de BEFORE (FOR EACH ROW), los cambios hechos a NEW solo existen
+-- durante la ejecución de la funcióm y no persisten luego de la transacción al
+-- usar RETURN NEW.
+UPDATE countries SET descripcountry = 'United States'
+WHERE country = 'USA'; -- NEW* = ("UNITED STATES",USA)
+SELECT descripcountry FROM countries WHERE country = 'USA'; -- United States
+
 -- vi. ¿Qué sucede ante un RETURN NULL?
+
+-- A diferencia de BEFORE (FOR EACH ROW), RETURN NULL no evita el INSERT, UPDATE
+-- o DELETE y simplemente finaliza la ejecución de la función para la fila
+-- actual.
+DELETE FROM countries WHERE country = 'Cod';
+
 -- vii. ¿Qué sucede ante un RAISE EXCEPTION?
+
+-- La transacción se interrumpe y todos los cambios se deshacen (rollback).
+INSERT INTO countries VALUES ('Error', 'ERR');
