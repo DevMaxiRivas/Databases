@@ -91,7 +91,16 @@ select * from movements;
 
 -- 6. Listar apellido, nombre, ciudad y salario de los empleados acompañado de la resta del salario 
 -- con el salario de la fila anterior de la misma ciudad. El resultado esperado es similar a:
---FALTA
+
+select 
+	lastname,
+	firstname,
+	city,
+	salary,
+	salary - lag(salary) over (partition by city order by salary) as difference
+from
+	employees
+;
 
 
 -- Muestra todos los productos agregando el promedio de precios y cantidad por categoria
