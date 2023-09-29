@@ -115,8 +115,13 @@ where
 	od.orderid = o.orderid 
 ;
 	
-
 -- Una vez eliminados los detalles, se eliminan las órdenes
+delete from orders o
+using customers c
+where 
+	c.companyname ilike '%companyname%' and
+	c.customerid = o.customerid 
+;
 
 --
 -- Trabajo Práctico 2
@@ -127,11 +132,40 @@ where
 -- pasados como parámetros y la función deberá devolver como resultado la
 -- cantidad de filas afectadas.
 
+create or replace function delete_trim(pt_columnname text, pt_tablename text)
+returns int
+as 
+$$
+declare li_quantity int;
+begin
+	execute 
+		format( 
+		'update %1$I
+		 set %2$I = trim(%2$I)
+		 where %2$I != trim(%2$I)
+		 ;'
+		,pt_tablename,pt_columnname)
+	;
+	get diagnostics li_quantity = ROW_COUNT;
+	return li_quantity;
+end;
+$$
+language plpgsql;
+
+select * from delete_trim('companyname','customers'); 
 
 -- B) Programar una función que reciba como parámetro un orderid y devuelva una
 -- cadena de caracteres (resumen) con el id, nombre, precio unitario y cantidad
 -- de todos los productos incluidos en la orden en cuestión.
-
+create or replace function detalle_orden(pi_orderid int4)
+returns text as
+$$
+declare lt_cadena
+begin
+	
+end;
+$$
+language plpgsql;
 
 
 -- D) Crear una función que muestre por cada detalle de orden: el nombre del
