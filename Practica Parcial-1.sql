@@ -2,27 +2,103 @@
 -- Base de Datos II
 
 -- 1) Insertar en la tabla region: Noroeste Argentino, con ID 5
+insert into region values
+(5,'Noroeste Argentino')
+;
 
 
 -- 2) Insertar en la tabla territories al menos 5 territorios de la nueva región
 -- utilizando la sintaxis multirow de INSERT
+select * from territories where regionid = 5;
+insert into territories values
+	(233,'San Juan',5),
+	(522,'Mendoza',5),
+	(512,'Chaco',5),
+	(572,'Misiones',5),
+	(562,'Salta',5)
+;
 
 -- 3) Crear una tabla tmpterritories con los siguientes atributos
     -- territoryid
     -- territorydescription
     -- regionid
     -- regiondescription
+create table tmpterritories(
+	territoryid varchar(20), foreign key (territoryid) references territories,
+    territorydescription varchar(50),
+    regionid int4, foreign key (regionid) references region,
+    regiondescription varchar(50)
+);
 
 -- 4) Mediante la sintaxis INSERT ... SELECT llenar la tabla del punto 3
 -- combinando información de las tablas region y territories
+truncate table tmpterritories;
+select * from tmpterritories;
+insert into tmpterritories
+	select 
+		territoryid,
+    	territorydescription,
+    	regionid,
+    	regiondescription
+    from territories inner join region using(regionid)
+    returning *
+ ;
 
 -- 5) Agregar dos columnas a la tabla customers donde se almacene:
     -- ordersquantity: con la cantidad de órdenes del cliente en cuestión
     -- ordersamount: el importe total de las órdenes realizadas
+alter table customers add column ordersquantity int4 default 0;
+alter table customers add column ordersamount numeric(10,2) default 0;
 
 -- 5.a) Mediante sentencia UPDATE ... FROM actualizar las columnas agregadas
+update customers c
+set 
+	ordersquantity = a.ordersquantity,
+	ordersamount = b.ordersamount 
+from 
+	(
+	select 
+		o.customerid,
+		count(o.orderid) as ordersquantity
+	from orders o
+	group by o.customerid
+	) as a,
+	(
+	select  
+		o.customerid,
+		sum(od.unitprice * od.quantity - od.discount) as ordersamount
+	from orders o inner join orderdetails od using(orderid)
+	group by o.customerid
+	) as b
+where 
+	c.customerid = a.customerid and
+	c.customerid = b.customerid
+;
+
+select customerid, ordersquantity, ordersamount
+from customers
+order by ordersamount desc 
+;
+
+update customers c
+set 
+	ordersquantity = 0,
+	ordersamount = 0
+;
 
 -- 5.b) Mediante sentencia UPDATE y subconsulta actualizar las col
+update customers c
+set ordersquantity = (
+	select count(o.orderid)
+	from orders o
+	where c.customerid = o.customerid
+	),
+	ordersamount = (
+	select coalesce(sum(od.unitprice*od.quantity-od.discount),0)
+	from orders o inner join orderdetails od using(orderid)
+	where c.customerid = o.customerid
+	)
+;
 
 -- 6) Desarrollar las sentencias necesarias que permitan eliminar todo el
 -- historial de òrdenes de un cliente cuyo dato conocido es companyname,
@@ -31,8 +107,21 @@
 
 -- Primero se eliminan los detalles, porque hacen referencia (FK) a las órdenes
 -- que se quieren eliminar
+delete from orderdetails od
+using customers c, orders o
+where 
+	c.companyname ilike '%companyname%' and
+	c.customerid = o.customerid and
+	od.orderid = o.orderid 
+;
 	
 -- Una vez eliminados los detalles, se eliminan las órdenes
+delete from orders o
+using customers c
+where 
+	c.companyname ilike '%companyname%' and
+	c.customerid = o.customerid 
+;
 
 --
 -- Trabajo Práctico 2
@@ -43,13 +132,59 @@
 -- pasados como parámetros y la función deberá devolver como resultado la
 -- cantidad de filas afectadas.
 
+create or replace function delete_trim(pt_columnname text, pt_tablename text)
+returns int
+as 
+$$
+declare li_quantity int;
+begin
+	execute 
+		format( 
+		'update %1$I
+		 set %2$I = trim(%2$I)
+		 where %2$I != trim(%2$I)
+		 ;'
+		,pt_tablename,pt_columnname)
+	;
+	get diagnostics li_quantity = ROW_COUNT;
+	return li_quantity;
+end;
+$$
+language plpgsql;
+
+select * from delete_trim('companyname','customers'); 
 
 -- B) Programar una función que reciba como parámetro un orderid y devuelva una
 -- cadena de caracteres (resumen) con el id, nombre, precio unitario y cantidad
 -- de todos los productos incluidos en la orden en cuestión.
 
+create or replace function detalle_orden(pi_orderid integer)
+returns text as $$
+declare
+    lr_fila record;
+    lt_texto text := '';
+begin
+    for lr_fila in
+        select p.productid, p.productname, od.unitprice, od.quantity
+        from products p join orderdetails od using(productid)
+        where orderid = pi_orderid
+    loop
+        lt_texto := format(
+            e'%1s %2s - %2$ - %s - %s\n',
+            lt_texto,
+            lr_fila.productid,
+            trim(lr_fila.productname),
+            lr_fila.unitprice,
+            lr_fila.quantity
+        );
+    end loop;
+    return lt_texto;
+end;
+$$ language plpgsql;
 
--- C) Prueba con orderid = 11077
+-- c) prueba con orderid = 11077
+
+select detalle_orden(11077);
 
 
 -- D) Crear una función que muestre por cada detalle de orden: el nombre del
@@ -57,26 +192,151 @@
 -- cantidad, importe unitario y subtotal de cada ítem para un intervalo de
 -- tiempo dado por parámetros.
 
+DROP FUNCTION intervalo_orders(date,date);
+CREATE OR replace FUNCTION intervalo_orders(pd_desde date, pd_hasta date)
+RETURNS TABLE (
+	companyname varchar(40),
+	orderdate date,
+	productid int4,
+	productname varchar(40),
+	quantity int4,
+	unitprice numeric(10,2),
+	subtotal numeric(10,2)
+) AS 
+$$
+BEGIN
+	RETURN query
+		SELECT
+			c.companyname,
+			o.orderdate, 
+			p.productid, 
+			p.productname,
+			od.quantity, 
+			od.unitprice,
+			od.quantity * od.unitprice - od.discount
+		FROM
+			customers c
+			INNER JOIN orders o using(customerid)
+			INNER JOIN orderdetails od using(orderid)
+			INNER JOIN products p using(productid)
+		WHERE o.orderdate BETWEEN pd_desde AND pd_hasta
+		ORDER BY o.orderid
+		;
+END;
+$$
+LANGUAGE plpgsql;
+
+
+SELECT * FROM intervalo_orders('1996-07-04', '1997-01-01');
 
 -- E) Función para el devolver el total de una orden dada por parámetro.
+
+create or replace function return_total_orden(pi_orderid int4)
+returns numeric(10,2) as
+$$
+declare ln_total numeric(10,2);
+begin
+	select coalesce(sum(quantity * unitprice - discount),0)
+	into ln_total 
+	from orderdetails
+	where orderid = pi_orderid
+	;
+	return ln_total;
+end;
+$$
+language plpgsql;
+
+select * from return_total_orden(10248);
+
 
 -- F) Crear una función donde se muestren todos los atributos de cada Orden
 -- junto a Id y Nombre del Cliente y el Empleado que la confeccionó. Mostrar el
 -- total utilizando la función del punto anterior.
+create or replace function orden_detallada()
+returns table(
+	orderid INTEGER,
+    customerid VARCHAR(10),
+    employeeid INTEGER,
+    orderdate DATE,
+    requireddate DATE,
+    shippeddate DATE,
+    shipvia INTEGER,
+    freight NUMERIC(10, 2),
+    shipname VARCHAR(40),
+    shipaddress VARCHAR(60),
+    shipcity VARCHAR(15),
+    shipregion VARCHAR(15),
+    shippostalcode VARCHAR(10),
+    shipcountry VARCHAR(15),
+    cliente VARCHAR(40), -- nuevo
+    empleado TEXT, -- nuevo
+    total NUMERIC(10, 2) -- nuevo
+) as
+$$
+begin
+	return query
+		select
+			o.*,
+			c.companyname,
+			concat(e.lastname,' ',e.firstname), 
+			(select * from return_total_orden(o.orderid))
+		from 
+			customers c
+			inner join orders o using(customerid)
+			inner join employees e using(employeeid)
+	;					
+end;
+$$
+language plpgsql;
 
+SELECT orderid, customerid, empleado,total FROM orden_detallada();
 
 -- G) Crear una función que muestre, por cada mes del año ingresado por
 -- parámetro, la cantidad de órdenes generada, junto a la cantidad de órdenes
 -- acumuladas hasta ese mes (inclusive).
+create or replace function muestra_mes(pi_year int4)
+returns table(
+	mes text,
+	cantidad int4,
+	acumuladas int4
+) as 
+$$
+begin
+	acumuladas := 0;
+	for mes, cantidad in (
+		select 
+			to_char(orderdate,'TMMonth') as month,
+			count(orderid) as quantity
+			from orders
+			where date_part('year',orderdate) = pi_year
+			group by date_part('month',orderdate),1
+	) loop
+		acumuladas = acumuladas + cantidad;
+		return next;
+	end loop;
+	
+end;
+$$
+language plpgsql;
 
+SELECT * FROM muestra_mes('1997');
 
 -- H) Crear una función que permita generar las órdenes de compra necesarias
 -- para todos los productos que se encuentran por debajo del nivel de stock,
 -- para esto deberá crear una tabla de órdenes de compra y su correspondiente
 -- tabla de detalles.
 
-
-
+create table orderssupliers(
+	orderid serial primary key,
+	supplierid int4, foreign key (supplierid) references suppliers,
+	orderdate date
+);
+create table orderdetailssupliers(
+	orderid integer not null, foreign key (orderid) references orderssupliers,
+	productid integer not null, foreign key (productid) references products,
+	quantity int4,
+	primary key(orderid, productid)
+);
 
 -- I) Crear una función que calcule y despliegue por cada país destino de
 -- ordenes (orders.shipcountry) y por un rango de tiempo ingresado por
@@ -95,7 +355,7 @@
 -- que devuelva la función inventada.
 
 
--- Trabajo Práctico 2
+-- Trabajo Práctico 3
 -- Base de Datos II
 -- Grupo 3:
     -- Rodrigo Kanchi Flores
