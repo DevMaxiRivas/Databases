@@ -32,34 +32,89 @@ create table tmpterritories(
 
 -- 4) Mediante la sintaxis INSERT ... SELECT llenar la tabla del punto 3
 -- combinando información de las tablas region y territories
-drop table 
-insert into tmpterritories values
+truncate table tmpterritories;
+select * from tmpterritories;
+insert into tmpterritories
 	select 
 		territoryid,
     	territorydescription,
     	regionid,
     	regiondescription
     from territories inner join region using(regionid)
+    returning *
  ;
 
 -- 5) Agregar dos columnas a la tabla customers donde se almacene:
     -- ordersquantity: con la cantidad de órdenes del cliente en cuestión
     -- ordersamount: el importe total de las órdenes realizadas
-
+alter table customers add column ordersquantity int4 default 0;
+alter table customers add column ordersamount numeric(10,2) default 0;
 
 -- 5.a) Mediante sentencia UPDATE ... FROM actualizar las columnas agregadas
+update customers c
+set 
+	ordersquantity = a.ordersquantity,
+	ordersamount = b.ordersamount 
+from 
+	(
+	select 
+		o.customerid,
+		count(o.orderid) as ordersquantity
+	from orders o
+	group by o.customerid
+	) as a,
+	(
+	select  
+		o.customerid,
+		sum(od.unitprice * od.quantity - od.discount) as ordersamount
+	from orders o inner join orderdetails od using(orderid)
+	group by o.customerid
+	) as b
+where 
+	c.customerid = a.customerid and
+	c.customerid = b.customerid
+;
 
+select customerid, ordersquantity, ordersamount
+from customers
+order by ordersamount desc 
+;
+
+update customers c
+set 
+	ordersquantity = 0,
+	ordersamount = 0
+;
 
 -- 5.b) Mediante sentencia UPDATE y subconsulta actualizar las col
-
+update customers c
+set ordersquantity = (
+	select count(o.orderid)
+	from orders o
+	where c.customerid = o.customerid
+	),
+	ordersamount = (
+	select coalesce(sum(od.unitprice*od.quantity-od.discount),0)
+	from orders o inner join orderdetails od using(orderid)
+	where c.customerid = o.customerid
+	)
+;
 
 -- 6) Desarrollar las sentencias necesarias que permitan eliminar todo el
 -- historial de òrdenes de un cliente cuyo dato conocido es companyname,
 -- utilizando DELETE ... USING
 
+
 -- Primero se eliminan los detalles, porque hacen referencia (FK) a las órdenes
 -- que se quieren eliminar
-
+delete from orderdetails od
+using customers c, orders o
+where 
+	c.companyname ilike '%companyname%' and
+	c.customerid = o.customerid and
+	od.orderid = o.orderid 
+;
+	
 
 -- Una vez eliminados los detalles, se eliminan las órdenes
 
