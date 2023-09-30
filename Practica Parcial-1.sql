@@ -338,6 +338,50 @@ create table orderdetailssupliers(
 	primary key(orderid, productid)
 );
 
+create or replace function reponer_stock()
+returns void as
+$$
+declare lr_fila RECORD;
+declare li_actualsup int4 := '000';
+declare li_actualord int4;
+begin 
+	for lr_fila in(
+		select 
+			supplierid, 
+			productid, 
+			unitsonorder - unitsinstock as quantity
+		from 
+			products
+		where 
+			not discontinued
+			and unitsinstock < reorderlevel
+			and unitsonorder - unitsinstock > 0
+		order by 1
+	) loop 
+		if li_actualsup != lr_fila.supplierid then 
+			li_actualsup := lr_fila.supplierid; 
+			insert into orderssupliers values
+			(default,li_actualsup,current_date)
+			returning orderid into li_actualord
+			;
+		end if;
+		insert into orderdetailssupliers values
+		(li_actualord,lr_fila.productid,lr_fila.quantity)
+		;	
+	end loop;
+end;
+$$
+language plpgsql;
+
+select * from reponer_stock();
+select * 
+from 
+	orderssupliers 
+	inner join orderdetailssupliers using(orderid)
+	inner join products using(productid)
+;
+
+
 -- I) Crear una función que calcule y despliegue por cada país destino de
 -- ordenes (orders.shipcountry) y por un rango de tiempo ingresado por
 -- parámetros la cantidad de productos diferentes que se vendieron y la cantidad
@@ -348,98 +392,489 @@ create table orderdetailssupliers(
 -- Belgium     9         2
 -- ...         ...       ...
 -- Los valores son solo ejemplos.
-
+DROP FUNCTION info_pais(date,date);
+create or replace function info_pais(pd_desde DATE, pd_hasta DATE)
+returns table(
+	shipcountry varchar(15),
+	productos bigint,
+	clientes bigint
+) as
+$$
+begin
+	return query
+		select
+			o.shipcountry,
+			count(distinct od.productid) as prods,
+			count(distinct c.customerid) as clien
+		from
+			customers c
+			inner join orders o using(customerid)
+			inner join orderdetails od using(orderid)
+		where orderdate between pd_desde and pd_hasta
+		group by 1
+	;
+end;
+$$
+language plpgsql;
+SELECT * FROM info_pais('1997-01-01', '1997-12-31');
 
 -- J) Inventar una única función que combine RETURN QUERY, recorrido de
 -- resultados de SELECT y RETURN NEXT. Indicar, además del código, qué se espera
 -- que devuelva la función inventada.
 
+CREATE OR REPLACE FUNCTION return_query_next()
+RETURNS TABLE(
+    nombre VARCHAR(40),
+    telefono VARCHAR(24),
+    pais VARCHAR(15),
+    rol TEXT
+) AS $$
+BEGIN
+    RETURN QUERY
+        SELECT companyname as nombre, phone as telefono, country as pais, 'Cliente' as rol
+        FROM customers;
+    RETURN QUERY
+        SELECT companyname as nombre, phone as telefono, country as pais, 'Proveedor' as rol
+        FROM suppliers;
+    FOR nombre, telefono, rol IN
+        SELECT companyname, phone, 'Transporte'
+        FROM shippers
+    LOOP
+        -- Como 'shippers' no tiene 'country', se infiere a partir del teléfono.
+        CASE
+            WHEN telefono ILIKE '(50%' THEN
+                pais := 'USA';
+            ELSE
+                pais := NULL;
+        END CASE;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+-- La función devuelve una tabla con los nombres de todas las compañias de la
+-- base de datos, su teléfono, su país y su rol (cliente, proveedor, rol)
+SELECT * FROM return_query_next();
+
 
 -- Trabajo Práctico 3
--- Base de Datos II
--- Grupo 3:
-    -- Rodrigo Kanchi Flores
-    -- Maximiliano Ezequiel Rivas
-    -- Ezequiel Lizandro Dzioba
 
 -- a. Crear un disparador para impedir que ingresen dos proveedores en el mismo 
 -- domicilio. (tener en cuenta la ciudad y país).
 
+create or replace function supplier_ver()
+returns trigger as
+$$
+declare li_supid varchar(60);
+begin
+	li_supid = (
+		select s.supplierid
+		from suppliers s
+		where 
+			trim(s.address) ilike trim(new.address)
+			and trim(s.city) ilike trim(new.city)
+			and trim(s.country) ilike trim(new.country)
+		limit 1
+	);
+	if li_supid is not null then
+		raise notice 'La direccion ya se encuentra registrada en otro proveedor';
+		return null;
+	else
+		return new;
+	end if;
+end;
+$$
+language plpgsql;
+
+create or replace trigger supplier_verificacion before update or insert on suppliers
+for each row execute procedure supplier_ver();
+
+insert into suppliers values 
+(145,'Prueba','MR','MR','49 Gilbert St.','London','Alguna','AAAA','UK','654646','FAX','www.pag.com');
+
+
+
 -- b. Realizar un disparador que impida incluir en un detalle de orden, cantidades no 
 -- disponibles. 
+create or replace function control_stock()
+returns trigger as
+$$
+declare li_stockdisp int4;
+begin 
+	li_stockdisp = (
+		select unitsinstock
+		from products
+		where productid = new.productid
+	);
+	if li_stockdisp < new.quantity then
+		raise notice 'Stock insuficiente';
+		return null;
+	else
+		return new;
+	end if;
+end;
+$$
+language plpgsql;
+
+create or replace trigger controlador_stock before insert or update on orderdetails
+for each row execute procedure control_stock();
+
+insert into orderdetails values (10251,1,'123','1000','20');
+
+
 
 -- c. Realizar un disparador que actualice el nivel de stock cuando se crean, modifican o 
 -- eliminan órdenes (y sus detalles). 
+create or replace function modifica_stock()
+returns trigger as
+$$
+begin
+	case
+		when TG_OP = 'UPDATE' then
+			if new.productid = old.productid then
+				update products 
+				set unitsinstock = unitsinstock + old.quantity - new.quantity
+				where productid = new.productid
+				;
+			else 
+				update products 
+				set unitsinstock = unitsinstock + old.quantity
+				where productid = old.productid
+				;
+				update products 
+				set unitsinstock = unitsinstock - new.quantity
+				where productid = new.productid
+				;
+			end if;
+		when TG_OP = 'INSERT' then
+			update products 
+			set unitsinstock = unitsinstock - new.quantity
+			where productid = new.productid
+			;
+		when TG_OP = 'DELETE' then
+			update products 
+			set unitsinstock = unitsinstock + old.quantity
+			where productid = old.productid
+			;
+	end case;
+	raise notice 'De % paso a %',old.quantity,new.quantity;
+	return new;
+end;
+$$
+language plpgsql;
 
+create or replace trigger modificacion_orderdetails after insert or update or delete on orderdetails
+for each row execute procedure modifica_stock();
+
+insert into orderdetails values (10248,1,14.00,10,0);
+delete from orderdetails where orderid = 10248 and productid  = 4;
+
+update orderdetails set quantity = '15', productid = '4' 
+where orderid = '10248' and productid = '1';
+
+update products set unitsinstock = 29 where productid = 1; 
+select * from orderdetails where orderid = 10248 and productid =4;
+select productid, unitsinstock
+from products 
+where productid = 4;
 
 -- d. Realizar un disparador de auditoría sobre la actualización de datos de los clientes. Se 
 -- debe almacenar el nombre del usuario la fecha en la que se hizo la actualización, la 
 -- operación realizada (alta/baja/modificación) y el valor que tenía cada atributo al 
 -- momento de la operación. 
+create table audits(
+	auditid serial primary key,
+	user_ name not null,
+	modifydate timestamp not null,
+	operation text not null,
+	before_customerid varchar(5),
+	before_companyname varchar(40),
+	before_contactname varchar(30),
+	before_contacttitle varchar(30),
+	before_address varchar(60),
+	before_city varchar(15),
+	before_region varchar(15),
+	before_postalcode varchar(10),
+	before_country varchar(15),
+	before_phone varchar(24),
+	before_fax varchar(24),
+	after_customerid varchar(5),
+	after_companyname varchar(40),
+	after_contactname varchar(30),
+	after_contacttitle varchar(30),
+	after_address varchar(60),
+	after_city varchar(15),
+	after_region varchar(15),
+	after_postalcode varchar(10),
+	after_country varchar(15),
+	after_phone varchar(24),
+	after_fax varchar(24)	
+);
+
+select current_timestamp, now() from customers limit 1;
+
+create or replace function audit()
+returns trigger as
+$$
+begin 
+	case 
+		when TG_OP = 'UPDATE' then
+			insert into audits values
+			(
+			default,current_user,now(),'MODIFICACION',
+			old.*,new.*
+			)
+			;
+		when TG_OP = 'INSERT' then
+			insert into audits(
+			auditid,
+			user_,
+			modifydate,
+			operation,
+			after_customerid, 
+			after_companyname, 
+			after_contactname, 
+			after_contacttitle, 
+			after_address, 
+			after_city, 
+			after_region, 
+			after_postalcode, 
+			after_country, 
+			after_phone, 
+			after_fax
+			) values
+			(default,current_user,current_timestamp,'ALTA',new.*)
+			;
+		when TG_OP = 'DELETE' then
+			insert into audits(
+			auditid,
+			user_,
+			modifydate,
+			operation,
+			before_customerid,
+			before_companyname,
+			before_contactname,
+			before_contacttitle,
+			before_address, 
+			before_city, 
+			before_region, 
+			before_postalcode, 
+			before_country, 
+			before_phone, 
+			before_fax
+			) values 
+			(default,current_user,current_timestamp,'BAJA',old.*)
+			;
+	end case;
+	return new;
+end;
+$$
+language plpgsql;
+
+create or replace trigger auditoria after update or insert or delete on customers
+for each row execute procedure audit();
+
+--Test
+truncate audits;
+select * from audits;
+
+insert into customers values
+('NEWUS','Alfreds Futterkiste','Maria Anders','Sales Representative','Obere Str. 57',
+'Berlin','12209','Germany','030-0074321','030-0076545')
+;
+update customers set contactname = 'NEWCO' where customerid ilike '%NEWUS%';
+delete from customers where customerid ilike '%NEWUS%';
 
 -- e. Agregar atributos en el encabezado de la Orden que registren la cantidad de artículos 
 -- del detalle y el importe total de cada orden. Realizar los triggers necesarios para 
 -- mantener la redundancia controlada de los nuevos atributos.
+alter table orders add column quantity int4;
+alter table orders add column amount money;
 
+create or replace function total_orders(pi_orderid int4)
+returns table(
+	quantity int4,
+	amount money
+) as 
+$$
+begin
+	return query
+		select
+			coalesce(sum(od.quantity),0)::int4,
+			coalesce(sum(od.quantity * od.unitprice - od.discount),0)::money
+		from orderdetails od
+		where pi_orderid = od.orderid
+	;
+end;
+$$
+language plpgsql;
+
+select * from total_orders(10248);
+
+
+create or replace function recalcular_orden()
+returns trigger as
+$$
+declare li_quantity int4;
+declare li_amount money;
+begin 
+	select * into li_quantity, li_amount from total_orders(new.orderid);
+	if li_quantity > 0 then
+		update orders
+		set quantity = li_quantity, amount = li_amount
+		where orderid = new.orderid or old.orderid = orderid
+		;
+	else
+		delete from orderdetails
+		where old.orderid = orderid
+		;
+		delete from orders
+		where old.orderid = orderid
+		;
+	end if;
+	return new;
+end;
+$$
+language plpgsql;
+
+create or replace trigger calcular_orden after update or insert or delete on orderdetails
+for each row execute procedure recalcular_orden();
+
+select productid, unitsinstock from products where productid = 3;
+
+update orderdetails 
+set quantity = 6
+where orderid = 10782;
+
+select orderid, quantity, amount
+from orders
+where orderid = 10782;
+
+select *
+from orderdetails o  
+where orderid = 10782;
+
+insert into orders values
+(10782,null,null,null,null,null,null,null,null,null,null,null);
+
+insert into orderdetails 
+values (10782,3,12.50,1,0);
+
+delete from orderdetails 
+where orderid = 10782;
 
 -- F) Realizar triggers a elección para probar las siguientes combinaciones y
 -- situaciones respondiendo las siguientes consultas:
 
+-- BEFORE - FOR STATEMENT ------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION before_for_statement()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE NOTICE '[BEFORE STMT] NEW = %', NEW; -- (i)
+    IF
+	0 < (SELECT COUNT(*) FROM countries WHERE country = 'URU')
+    AND TG_OP != 'DELETE' THEN
+        RAISE EXCEPTION '[BEFORE STMT] Uruguay existe :O' -- (iii)
+        USING HINT = 'Elimina a Uruguay ;) SALAME';
+    END IF;
+    RETURN NULL; -- (ii)
+END
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER before_for_statement BEFORE INSERT OR UPDATE OR DELETE
+ON countries FOR STATEMENT
+EXECUTE FUNCTION before_for_statement();
+
 -- i. ¿Qué sucede con la variable NEW?
+
+-- NEW es NULL.
+DELETE FROM countries
+WHERE country = 'CAN'; -- NEW = <NULL>
 
 -- ii. ¿Qué sucede ante un RETURN NULL?
 
+-- La ejecución de la función finaliza, por lo que el trigger y la transacción
+-- también finalizan y los cambios se ven aplicados.
+INSERT INTO countries VALUES ('Canada', 'CAN');
+
 -- iii. ¿Qué sucede ante un RAISE EXCEPTION?
+
+-- La transacción se interrumpe y todos los cambios se deshacen (rollback).
+INSERT INTO countries VALUES ('Uruguay', 'URU');
+UPDATE countries SET descripcountry = 'uruguay' WHERE country = 'URU';
+DELETE FROM countries WHERE country = 'URU';
+INSERT INTO countries VALUES
+    ('emiratos árabes unidos', 'ARE'),
+    ('Bolivia', 'BOL');
+
+-- AFTER - FOR EACH ROW --------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION after_for_each_row()
+RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+    RAISE NOTICE '[AFTER ROW] NEW = %', NEW; -- (iv)
+    IF TG_OP != 'DELETE' THEN
+        NEW.descripcountry := UPPER(NEW.descripcountry); -- (v)
+        RAISE NOTICE '[AFTER ROW] NEW* = %', NEW;
+    END IF;
+    CASE NEW.country
+        WHEN 'ARE', 'USA' THEN RETURN NEW; -- (v)
+        WHEN 'ERR' THEN RAISE EXCEPTION '[AFTER ROW] Algo salió mal.'; -- (vii)
+        ELSE RETURN NULL; -- (vi)
+    END CASE;
+END
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER after_for_each_row AFTER INSERT OR UPDATE OR DELETE
+ON countries FOR EACH ROW
+EXECUTE FUNCTION after_for_each_row();
 
 -- iv. ¿Qué sucede con la variable NEW?
 
+-- INSERT: toma los valores de la fila a insertar.
+INSERT INTO countries VALUES ('Nombre', 'Cod'); -- NEW = (Nombre,Cod)
+select * from countries ;
+-- UPDATE: toma los valores de la fila a actualizar y sus correspondientes
+-- modificaciones.
+UPDATE countries SET descripcountry = 'bolivia'
+WHERE country = 'BOL'; -- NEW = (bolivia,BOL)
+
+-- DELETE: es NULL.
+DELETE FROM countries WHERE country = 'CHI'; -- NEW = <NULL>
+
 -- v. ¿Qué sucede ante una modificación de valores de NEW y RETURN NEW?
+
+-- A diferencia de BEFORE (FOR EACH ROW), los cambios hechos a NEW solo existen
+-- durante la ejecución de la funcióm y no persisten luego de la transacción al
+-- usar RETURN NEW.
+UPDATE countries SET descripcountry = 'United States'
+WHERE country = 'USA'; -- NEW* = ("UNITED STATES",USA)
+SELECT descripcountry FROM countries WHERE country = 'USA'; -- United States
 
 -- vi. ¿Qué sucede ante un RETURN NULL?
 
+-- A diferencia de BEFORE (FOR EACH ROW), RETURN NULL no evita el INSERT, UPDATE
+-- o DELETE y simplemente finaliza la ejecución de la función para la fila
+-- actual.
+DELETE FROM countries WHERE country = 'Cod';
+
 -- vii. ¿Qué sucede ante un RAISE EXCEPTION?
 
-
---TP4 Funciones de Ventana
-
--- 1. Listar id, apellido y nombre de los cliente ordenados en un ranking decreciente, según la 
--- función del contacto (dentro de la empresa) contacttitle.
-	
--- 2. Mostrar, por cada mes del año 1997, la cantidad de ordenes generadas, junto a la cantidad de 
--- ordenes acumuladas hasta ese mes (inclusive). El resultado esperado es el mismo que el 
--- obtenido en el ejercicio 2.g del trabajo práctico 1.
-
--- 3. Listar todos los empleados agregando las columnas: salario, salario promedio, ranking según 
--- salario del empleado, ranking según salario del empleado en la ciudad. Utilizando la definición 
--- explícita de ventanas
-
--- 4. Listar los mismos datos del punto anterior agregando una columna con la diferencia de salario 
--- con el promedio. Utilizando la definición explícita de ventanas
-
--- 5. Crear una tabla con movimientos históricos de productos y llenarla con los datos 
--- correspondientes. La misma debe tener para cada producto, todas la órdenes en las que fue 
--- comprado, en forma cronológica con las siguientes columnas:
--- productid, 
--- operationorder: autonumerado que comienza en uno para cada producto distinto), 
--- orderdate: fecha de la orden, 
--- companyname, 
--- quantity: cantidad de productos de la orden en cuestión
--- Las primeras 3 filas deberían tener la siguiente información:
-
--- productid operationorder orderdate Companyname 					Quantity
--- 1			 1 			1996-08-20 QUICK-Stop 					  45
--- 1			 2			1996-08-30 Rattlesnake Canyon Grocery 	  18
--- 1			 3			1996-09-30 Lonesome Pine Restaurant 	  20
-
-
--- 6. Listar apellido, nombre, ciudad y salario de los empleados acompañado de la resta del salario 
--- con el salario de la fila anterior de la misma ciudad. El resultado esperado es similar a:
+-- La transacción se interrumpe y todos los cambios se deshacen (rollback).
+INSERT INTO countries VALUES ('Error', 'ERR');
 
 
 -- TP4
 -- 1. Listar id, apellido y nombre de los cliente ordenados en un ranking decreciente, según la 
 -- función del contacto (dentro de la empresa) contacttitle.
-
+select
+	customerid,
+	companyname,
+	dense_rank(count(contacttitle)) over (partition by contacttitle)
+from customers
+;
 	
 -- 2. Mostrar, por cada mes del año 1997, la cantidad de ordenes generadas, junto a la cantidad de 
 -- ordenes acumuladas hasta ese mes (inclusive). El resultado esperado es el mismo que el 
