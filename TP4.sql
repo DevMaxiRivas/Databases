@@ -1,15 +1,51 @@
--- 1. Listar id, apellido y nombre de los cliente ordenados en un ranking decreciente, según la 
--- función del contacto (dentro de la empresa) contacttitle.
+-- 1. Listar id, apellido y nombre de los cliente ordenados en un ranking decreciente,
+-- según la función del contacto (dentro de la empresa) contacttitle.
 -- CORREGIR
-select
-    customerid,
-    companyname,
-    contacttitle,
-    dense_rank() over (order by contacttitle desc) as ranking
-from customers
-order by ranking asc;
+   
+SELECT 
+	c.customerid, 
+	c.companyname, 
+	c.contacttitle,
+	r.ranking
+FROM customers c
+	inner join(
+	    select
+	    	contacttitle, 
+	   		dense_rank() OVER (ORDER BY quantity DESC) as ranking
+    	FROM(
+	        SELECT contacttitle, COUNT(*) as quantity
+	        FROM customers 
+	        GROUP BY contacttitle
+    	) as subquery
+	)r using(contacttitle)
+ORDER BY r.ranking,c.contacttitle
 
+   
+select contacttitle,count(customerid)
+from customers 
+group by 1
+order by 2 desc;
 	
+
+select 
+	contactname,
+	contacttitle,
+	dense_rank() over (
+		partition by contacttitle 
+		order by contacttitle desc,
+		contactname asc) as rancXtitulo
+	from customers
+;
+
+select 
+	contactname,
+	contacttitle,
+	dense_rank() over (
+		partition by contacttitle 
+		order by contacttitle desc,
+		contactname asc) as rancXtitulo
+	from customers
+;
 -- 2. Mostrar, por cada mes del año 1997, la cantidad de ordenes generadas, junto a la cantidad de 
 -- ordenes acumuladas hasta ese mes (inclusive). El resultado esperado es el mismo que el 
 -- obtenido en el ejercicio 2.g del trabajo práctico 1.
@@ -31,8 +67,8 @@ select
     salary,
     avg(salary) over () as average,
     dense_rank() over (order by salary desc) as salary_ranking,
-    country,
-    dense_rank() over (partition by country order by salary desc) as country_salary_ranking
+    city,
+    dense_rank() over (partition by city order by salary desc) as country_salary_ranking
 from employees 
 order by country, salary desc;
 
@@ -131,7 +167,7 @@ order by c. categoryname, p. productname
 from
 	categories c
 	inner join products p using(categoryid)
-orde r by c. categoryname, p. productname
+order by c. categoryname, p. productname
 ;
 
 -- Muestra todos los productos repitiendo en cada fila el promedio general

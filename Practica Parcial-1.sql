@@ -869,26 +869,51 @@ INSERT INTO countries VALUES ('Error', 'ERR');
 -- TP4
 -- 1. Listar id, apellido y nombre de los cliente ordenados en un ranking decreciente, según la 
 -- función del contacto (dentro de la empresa) contacttitle.
-select
-	customerid,
-	companyname,
-	dense_rank(count(contacttitle)) over (partition by contacttitle)
-from customers
-;
+
 	
 -- 2. Mostrar, por cada mes del año 1997, la cantidad de ordenes generadas, junto a la cantidad de 
 -- ordenes acumuladas hasta ese mes (inclusive). El resultado esperado es el mismo que el 
 -- obtenido en el ejercicio 2.g del trabajo práctico 1.
 
+select 
+	to_char(orderdate,'TMMonth') as mes,
+	count(orderid) as cantidad,
+	sum(count(orderid)) over(order by date_part('month',orderdate)) as acumuladas
+from orders
+where date_part('year',orderdate) = '1997'
+group by date_part('month',orderdate),1
+;
+
 
 -- 3. Listar todos los empleados agregando las columnas: salario, salario promedio, ranking según 
 -- salario del empleado, ranking según salario del empleado en la ciudad. Utilizando la definición 
 -- explícita de ventanas
+select
+	concat(lastname,' ', firstname) as name,
+	salary,
+	avg(salary) over () as avg_salary,
+	dense_rank() over(order by salary desc) ranking,
+	city,
+	dense_rank() over(partition by city order by salary desc) city_ranking
+from employees
+order by city,1 desc
+;
 
+select * from employees;
 
 -- 4. Listar los mismos datos del punto anterior agregando una columna con la diferencia de salario 
 -- con el promedio. Utilizando la definición explícita de ventanas
-
+select
+	concat(lastname,' ', firstname) as name,
+	salary,
+	avg(salary) over () as avg_salary,
+	dense_rank() over(order by salary desc) as ranking,
+	city,
+	dense_rank() over(partition by city order by salary desc) as city_ranking,
+	salary - avg(salary) over () as difference_salary
+from employees
+order by city,1 desc
+;
 
 -- 5. Crear una tabla con movimientos históricos de productos y llenarla con los datos 
 -- correspondientes. La misma debe tener para cada producto, todas la órdenes en las que fue 
@@ -904,43 +929,167 @@ from customers
 -- 1			 1 			1996-08-20 QUICK-Stop 					  45
 -- 1			 2			1996-08-30 Rattlesnake Canyon Grocery 	  18
 -- 1			 3			1996-09-30 Lonesome Pine Restaurant 	  20
+create table movements(
+	productid int4, foreign key (productid) references products,
+	operationorder bigint,
+	orderdate date,
+	companyname varchar(60),
+	quantity int4
+);
 
+alter table orders add column quantity int4;
+alter table orders add column amount money;
 
+insert into movements
+	select
+		productid,
+		row_number() over (partition by productid order by orderdate) as operationorder,
+		orderdate,
+		companyname,
+		od.quantity
+	from
+		customers 
+		inner join orders using(customerid)
+		inner join orderdetails od using(orderid)
+	order by 1,2
+	;
+select * from movements;
 
 -- 6. Listar apellido, nombre, ciudad y salario de los empleados acompañado de la resta del salario 
 -- con el salario de la fila anterior de la misma ciudad. El resultado esperado es similar a:
-
+select
+	concat(lastname,' ', firstname) as name,
+	city,
+	salary,
+	salary - lag(salary) over (partition by city order by salary)
+from employees;
 
 -- Muestra todos los productos agregando el promedio de precios y cantidad por categoria
-
+select 
+	productid,
+	avg(unitprice) over () as avg,
+	categoryid,
+	count(productid) over(partition by categoryid) as quantity_x_categoryid
+from products
+; 
 
 -- Define una ventana "particionando" por nombre de la categoria y por el nombre del producto
-
+select
+	categoryid,
+	productname,
+	unitprice::money,
+	dense_rank() over (partition by categoryid order by unitprice desc) as ranking
+from
+	products
+;
 
 -- Define una ventana "particionando" por nombre de la categoria y "ordenamos" por el nombre del producto
-
+select
+	categoryid,
+	productname,
+	unitprice::money,
+	dense_rank() over (partition by categoryid order by categoryid,productname) as ranking
+from
+	products
+;
 
 -- Muestra todos los productos repitiendo en cada fila el promedio general
+select
+	productid,
+	productname,
+	unitprice::money,
+	avg(unitprice) over () as avg
+from products
+order by 1;
 
 
 -- Muestra todos los productos repitiendo en cada fila el promedio general
 -- Agregando el promedio por categoria
+select
+	categoryid,
+	productid,
+	productname,
+	unitprice::money,
+	avg(unitprice) over ()::money as avg,
+	avg(unitprice) over (partition by categoryid)::money as avg_category
+from products
+order by 1;
 
+-- Pero ¿cómo podemos hacer si lo que queremos es mantener el listado completo de los 
+-- datos de productos, con sus categorías y además la cantidad y promedio de precio por 
+-- categoría?
+
+select
+	categoryname, 
+	productid,
+	productname,
+	count(productid) over(partition by categoryid) as quantity_category,
+	avg(unitprice) over(partition by categoryid)::money as avg
+from products inner join categories using(categoryid)
+; 
 
 -- Muestra todos los productos repitiendo en cada fila el promedio general
 -- Agregando el promedio por categoria
 -- Agregando la diferencia entre el precio de cada producto 
 -- y el promedio segun categoria
  
-
+select
+	categoryid,
+	productid,
+	productname,
+	unitprice::money,
+	avg(unitprice) over ()::money as avg,
+	(unitprice - avg(unitprice) over ())::money as difference_with_avg,
+	avg(unitprice) over (partition by categoryid)::money as avg_category
+from products
+order by 1;
 
 -- Muestra todos los productos repitiendo en cada fila el promedio general
 -- Agregando el promedio por categoria
 -- Agregando la diferencia entre el precio de cada producto 
 -- y el promedio segun categoria
 -- Agregando ranking de precios por categoria
+select
+	categoryname,
+	productid,
+	productname,
+	unitprice::money,
+	avg(unitprice) over ()::money as avg,
+	(unitprice - avg(unitprice) over ())::money as difference_with_avg,
+	avg(unitprice) over (partition by categoryid)::money as avg_category,
+	dense_rank() over (partition by categoryid order by unitprice desc) as ranking
+from products inner join categories using(categoryid)
+order by 1;
 
+select
+	categoryname,
+	productid,
+	productname,
+	last_value(unitprice) over (partition by categoryid order by categoryid,productid) as ultimo_valor,
+	unitprice::money,
+	avg(unitprice) over ()::money as avg,
+	(unitprice - avg(unitprice) over ())::money as difference_with_avg,
+	avg(unitprice) over (partition by categoryid)::money as avg_category,
+	dense_rank() over (partition by categoryid order by unitprice desc) as ranking
+from products inner join categories using(categoryid)
+order by 1;
 
--- Diferencia entre dense_rank() y rank() 
--- Por ejemplo rank() si se tiene dos filas con rank 3 el siguiente en el ranking sera 5
--- Por ejemplo dense_rank() si se tiene dos filas con rank 3 el siguiente en el ranking sera 4
+select count(orderid) from orders;
+
+-- obtener 	customerid,	orderid, orderdate y la fecha de la primera orden que realizo es cliente
+-- PREGUNTAR PORQUE DEVUELVEN LO MISMO
+select 
+	customerid,
+	orderid,
+	orderdate,
+	min(orderdate) over (partition by customerid order by orderdate) as primera_orden
+from orders
+;
+
+select 
+	customerid,
+	orderid,
+	orderdate,
+	first_value(orderdate) over (partition by customerid order by orderdate) as primera_orden
+from orders
+;
